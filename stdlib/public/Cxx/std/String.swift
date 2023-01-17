@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+// MARK: Initializing C++ string from a Swift String
+
 extension std.string {
   /// Creates a C++ string having the same content as the given Swift string.
   ///
@@ -23,6 +25,22 @@ extension std.string {
   }
 }
 
+extension std.u16string {
+  /// Creates a C++ UTF-16 string having the same content as the given Swift
+  /// string.
+  ///
+  /// - Complexity: O(*n*), where *n* is the number of UTF-16 code units in the
+  ///   Swift string.
+  public init(_ string: String) {
+    self.init()
+    for char in string.utf16 {
+      self.push_back(char)
+    }
+  }
+}
+
+// MARK: Initializing C++ string from a Swift String literal
+
 extension std.string: ExpressibleByStringLiteral {
   public init(stringLiteral value: String) {
     self.init(value)
@@ -34,6 +52,14 @@ extension std.string: CustomDebugStringConvertible {
     return "std.string(\(String(cxxString: self)))"
   }
 }
+
+extension std.u16string: ExpressibleByStringLiteral {
+  public init(stringLiteral value: String) {
+    self.init(value)
+  }
+}
+
+// MARK: Initializing Swift String from a C++ string
 
 extension String {
   /// Creates a String having the same content as the given C++ string.
@@ -51,5 +77,21 @@ extension String {
       String(decoding: $0, as: UTF8.self)
     }
     withExtendedLifetime(cxxString) {}
+  }
+
+  /// Creates a String having the same content as the given C++ UTF-16 string.
+  ///
+  /// If `cxxString` contains ill-formed UTF-16 code unit sequences, this
+  /// initializer replaces them with the Unicode replacement character
+  /// (`"\u{FFFD}"`).
+  ///
+  /// - Complexity: O(*n*), where *n* is the number of bytes in the C++ UTF-16
+  ///   string.
+  public init(_ cxxU16String: std.u16string) {
+    let buffer = UnsafeBufferPointer<UInt16>(
+      start: cxxU16String.__dataUnsafe(),
+      count: cxxU16String.size())
+    self = String(decoding: buffer, as: UTF16.self)
+    withExtendedLifetime(cxxU16String) {}
   }
 }
