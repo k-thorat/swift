@@ -38,6 +38,7 @@ enum class SourceKitRequest {
   CursorInfo,
   RangeInfo,
   RelatedIdents,
+  InactiveRanges,
   SyntaxMap,
   Structure,
   Format,

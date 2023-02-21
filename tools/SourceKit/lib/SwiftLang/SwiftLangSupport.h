@@ -671,6 +671,12 @@ public:
       ArrayRef<const char *> Args, SourceKitCancellationToken CancellationToken,
       std::function<void(const RequestResult<RelatedIdentsInfo> &)> Receiver)
       override;
+  
+  void findInactiveRangesInFile(
+      StringRef Filename, bool CancelOnSubsequentRequest,
+      ArrayRef<const char *> Args, SourceKitCancellationToken CancellationToken,
+      std::function<void(const RequestResult<InactiveRangesInfo> &)> Receiver)
+      override;
 
   void syntacticRename(llvm::MemoryBuffer *InputBuf,
                        ArrayRef<RenameLocations> RenameLocations,

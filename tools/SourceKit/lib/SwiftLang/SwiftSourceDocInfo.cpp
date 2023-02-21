@@ -2573,6 +2573,118 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
 }
 
 //===----------------------------------------------------------------------===//
+// SwiftLangSupport::findInactiveRangesInFile
+//===----------------------------------------------------------------------===//
+
+namespace {
+class IfConfigScanner : public SourceEntityWalker {
+  SmallVector<IfConfigInfo, 8> &Infos;
+  SourceManager &SourceMgr;
+  unsigned BufferID = -1;
+  bool Cancelled = false;
+
+public:
+  explicit IfConfigScanner(
+      SourceFile &SrcFile, unsigned BufferID,
+      SmallVector<IfConfigInfo, 8> &Infos)
+      : Infos(Infos),
+        SourceMgr(SrcFile.getASTContext().SourceMgr), BufferID(BufferID) {
+
+  }
+
+private:
+  bool walkToDeclPre(Decl *D, CharSourceRange Range) override {
+    if (Cancelled)
+      return false;
+    
+    if (auto IfDecl = dyn_cast<IfConfigDecl>(D)) {
+      for (auto &Clause : IfDecl->getClauses()) {
+        unsigned Offset = SourceMgr.getLocOffsetInBuffer(Clause.Loc, BufferID);
+        IfConfigInfo Info;
+        Info.Offset = Offset;
+        Info.IsActive = Clause.isActive;
+        Infos.emplace_back(Info);
+      }
+    }
+
+    return true;
+  }
+};
+
+} // end anonymous namespace
+
+void SwiftLangSupport::findInactiveRangesInFile(
+    StringRef InputFile, bool CancelOnSubsequentRequest,
+    ArrayRef<const char *> Args, SourceKitCancellationToken CancellationToken,
+    std::function<void(const RequestResult<InactiveRangesInfo> &)> Receiver) {
+
+  std::string Error;
+  SwiftInvocationRef Invok =
+      ASTMgr->getTypecheckInvocation(Args, InputFile, Error);
+  if (!Invok) {
+    LOG_WARN_FUNC("failed to create an ASTInvocation: " << Error);
+    Receiver(RequestResult<InactiveRangesInfo>::fromError(Error));
+    return;
+  }
+
+  class IfConfigConsumer : public SwiftASTConsumer {
+    std::function<void(const RequestResult<InactiveRangesInfo> &)> Receiver;
+    SwiftInvocationRef Invok;
+
+  public:
+    IfConfigConsumer(std::function<void(const RequestResult<InactiveRangesInfo> &)> Receiver,
+                     SwiftInvocationRef Invok)
+      : Receiver(std::move(Receiver)), Invok(Invok) { }
+
+    // FIXME: Don't silently eat errors here.
+    void handlePrimaryAST(ASTUnitRef AstUnit) override {
+      auto &SrcFile = AstUnit->getPrimarySourceFile();
+      SmallVector<IfConfigInfo, 8> Configs;
+      unsigned BufferID = SrcFile.getBufferID().value();
+      IfConfigScanner Scanner(SrcFile, BufferID, Configs);
+      Scanner.walk(SrcFile);
+      
+      // Sort by offset so we get deterministic output.
+      llvm::sort(Configs,
+                 [](const IfConfigInfo &LHS,
+                    const IfConfigInfo &RHS) -> bool {
+                    return LHS.Offset < RHS.Offset;
+                 });
+      InactiveRangesInfo Info;
+      Info.Configs = Configs;
+      Receiver(RequestResult<InactiveRangesInfo>::fromResult(Info));
+    }
+
+    void cancelled() override {
+      Receiver(RequestResult<InactiveRangesInfo>::cancelled());
+    }
+
+    void failed(StringRef Error) override {
+      LOG_WARN_FUNC("related idents failed: " << Error);
+      Receiver(RequestResult<InactiveRangesInfo>::fromError(Error));
+    }
+
+    static CaseStmt *getCaseStmtOfCanonicalVar(Decl *D) {
+      assert(D);
+      if (auto *VD = dyn_cast<VarDecl>(D)) {
+        if (auto *Canonical = VD->getCanonicalVarDecl()) {
+          return dyn_cast_or_null<CaseStmt>(Canonical->getRecursiveParentPatternStmt());
+        }
+      }
+      return nullptr;
+    }
+  };
+
+  auto Consumer = std::make_shared<IfConfigConsumer>(Receiver, Invok);
+  /// FIXME: When request cancellation is implemented and Xcode adopts it,
+  /// don't use 'OncePerASTToken'.
+  static const char OncePerASTToken = 0;
+  const void *Once = CancelOnSubsequentRequest ? &OncePerASTToken : nullptr;
+  ASTMgr->processASTAsync(Invok, std::move(Consumer), Once, CancellationToken,
+                          llvm::vfs::getRealFileSystem());
+}
+
+//===----------------------------------------------------------------------===//
 // SwiftLangSupport::semanticRefactoring
 //===----------------------------------------------------------------------===//
 
